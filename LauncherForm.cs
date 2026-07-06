@@ -4,6 +4,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Reflection;
 using System.Text;
+using System.Threading;
 
 namespace WoWLauncherCommunity;
 
@@ -27,6 +28,7 @@ internal sealed class LauncherForm : Form
     private readonly Icon _applicationIcon;
     private Process? _ownedProxyProcess;
     private bool _exitRequested;
+    private int _classicLaunchGeneration;
 
     private static bool UseChinese =>
         string.Equals(CultureInfo.CurrentUICulture.TwoLetterISOLanguageName, "zh", StringComparison.OrdinalIgnoreCase);
@@ -72,7 +74,7 @@ internal sealed class LauncherForm : Form
             Font = new Font(Font.FontFamily, 13F, FontStyle.Regular),
             UseVisualStyleBackColor = true
         };
-        launchClassicButton.Click += (_, _) => LaunchGame(ClassicExeRelativePath);
+        launchClassicButton.Click += (_, _) => LaunchClassic();
 
         Controls.Add(titleLabel);
         Controls.Add(launchRemasteredButton);
@@ -85,7 +87,7 @@ internal sealed class LauncherForm : Form
         trayMenu.Items.Add(Ui("显示启动器", "Show launcher"), null, (_, _) => RestoreFromTray());
         trayMenu.Items.Add(new ToolStripSeparator());
         trayMenu.Items.Add(Ui("打开重制版", "Open remastered"), null, (_, _) => LaunchGame(RemasteredExeRelativePath));
-        trayMenu.Items.Add(Ui("打开原始版", "Open original"), null, (_, _) => LaunchGame(ClassicExeRelativePath));
+        trayMenu.Items.Add(Ui("打开原始版", "Open original"), null, (_, _) => LaunchClassic());
         trayMenu.Items.Add(new ToolStripSeparator());
         trayMenu.Items.Add(Ui("退出程序", "Exit program"), null, (_, _) => ExitFromTray());
 
@@ -111,7 +113,7 @@ internal sealed class LauncherForm : Form
 
     private static Icon LoadApplicationIcon()
     {
-        const string resourceName = "ico.ico";
+        const string resourceName = "icon.ico";
 
         using var stream = Assembly.GetExecutingAssembly()
             .GetManifestResourceStream(resourceName);
@@ -125,7 +127,9 @@ internal sealed class LauncherForm : Form
     {
         RunQuietly(() => ClearDirectoryContents(Path.Combine(_rootDirectory, ClassicWdbRelativePath)));
         RunQuietly(() => ClearDirectoryContents(Path.Combine(_rootDirectory, RemasteredCacheRelativePath)));
-        RunQuietly(WriteClassicRealmlist);
+
+        // Do not create or modify 1.12.1\realmlist.wtf at ordinary launcher startup.
+        // It exists only briefly while Original is launched.
         RunQuietly(StartProxy);
     }
 
@@ -152,6 +156,15 @@ internal sealed class LauncherForm : Form
             realmlistPath,
             $"set realmlist {ipv4}:{ServerPort}{Environment.NewLine}",
             new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+    }
+
+    private void DeleteClassicRealmlist()
+    {
+        var realmlistPath = Path.Combine(_rootDirectory, RealmlistRelativePath);
+        if (File.Exists(realmlistPath))
+        {
+            File.Delete(realmlistPath);
+        }
     }
 
     private static string ResolveIpv4(string host)
@@ -196,6 +209,71 @@ internal sealed class LauncherForm : Form
         startInfo.ArgumentList.Add($"ServerBuild={ServerBuild}");
 
         _ownedProxyProcess = Process.Start(startInfo);
+    }
+
+    private void LaunchClassic()
+    {
+        var generation = Interlocked.Increment(ref _classicLaunchGeneration);
+
+        RunQuietly(() =>
+        {
+            // 1. Write the direct legacy endpoint only for this 1.12.1 launch.
+            WriteClassicRealmlist();
+
+            Process? classicProcess = null;
+            try
+            {
+                var gamePath = Path.Combine(_rootDirectory, ClassicExeRelativePath);
+                classicProcess = Process.Start(new ProcessStartInfo
+                {
+                    FileName = gamePath,
+                    WorkingDirectory = Path.GetDirectoryName(gamePath)!,
+                    UseShellExecute = true
+                });
+
+                if (classicProcess is null)
+                {
+                    DeleteClassicRealmlist();
+                    return;
+                }
+
+                // WoW reads realmlist.wtf during early GUI startup. Wait until its
+                // input queue is ready (maximum five seconds), then delete the file.
+                // This keeps the launcher UI responsive and avoids a permanent endpoint file.
+                var startedProcess = classicProcess;
+                _ = Task.Run(() => DeleteClassicRealmlistAfterStart(startedProcess, generation));
+                classicProcess = null; // The background task now owns disposal.
+            }
+            finally
+            {
+                classicProcess?.Dispose();
+            }
+        });
+    }
+
+    private void DeleteClassicRealmlistAfterStart(Process classicProcess, int generation)
+    {
+        try
+        {
+            try
+            {
+                classicProcess.WaitForInputIdle(5_000);
+            }
+            catch
+            {
+                // An early exit or no available GUI queue must not leave the file behind.
+            }
+        }
+        finally
+        {
+            classicProcess.Dispose();
+
+            // A later Original launch owns the current temporary realmlist file.
+            if (generation == Volatile.Read(ref _classicLaunchGeneration))
+            {
+                RunQuietly(DeleteClassicRealmlist);
+            }
+        }
     }
 
     private void LaunchGame(string relativeExePath)
