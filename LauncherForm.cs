@@ -10,8 +10,8 @@ namespace WoWLauncherCommunity;
 internal sealed class LauncherForm : Form
 {
     // Fixed values compiled into Launcher.exe. HermesProxy.config is not edited.
-    private const string ServerAddress = "moshou.dynv6.net";
-    private const int ServerPort = 32769;
+    private const string ServerAddress = "your.server.com";
+    private const int ServerPort = 3724;
     private const int ClientBuild = 42597;
     private const int ServerBuild = 5875;
 
