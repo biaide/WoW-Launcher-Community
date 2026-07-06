@@ -13,5 +13,14 @@
     <PublishSingleFile>true</PublishSingleFile>
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
     <PublishTrimmed>false</PublishTrimmed>
+
+    <!-- Applies the icon to Launcher.exe. -->
+    <ApplicationIcon>winterspring-launcher-icon.ico</ApplicationIcon>
   </PropertyGroup>
+
+  <!-- The same icon is embedded for the window and notification-area icon. -->
+  <ItemGroup>
+    <EmbeddedResource Include="winterspring-launcher-icon.ico"
+                      LogicalName="WoWLauncherCommunity.LauncherIcon.ico" />
+  </ItemGroup>
 </Project>

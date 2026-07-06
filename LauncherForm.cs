@@ -1,18 +1,21 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
+using System.Reflection;
 using System.Text;
 
 namespace WoWLauncherCommunity;
 
 internal sealed class LauncherForm : Form
 {
-    // The only server values compiled into Launcher.exe.
+    // Fixed values compiled into Launcher.exe. HermesProxy.config is not edited.
     private const string ServerAddress = "moshou.dynv6.net";
     private const int ServerPort = 32769;
+    private const int ClientBuild = 42597;
+    private const int ServerBuild = 5875;
 
     private const string ProxyExeName = "HermesProxy.exe";
-    private const string ProxyConfigName = "HermesProxy.config";
     private const string ClassicExeRelativePath = @"1.12.1\WoW.exe";
     private const string RemasteredExeRelativePath = @"1.14.2\_classic_era_\WowClassic_ForCustomServers.exe";
     private const string RealmlistRelativePath = @"1.12.1\realmlist.wtf";
@@ -21,47 +24,75 @@ internal sealed class LauncherForm : Form
 
     private readonly string _rootDirectory = AppContext.BaseDirectory;
     private readonly NotifyIcon _trayIcon;
+    private readonly Icon _applicationIcon;
     private Process? _ownedProxyProcess;
     private bool _exitRequested;
 
+    private static bool UseChinese =>
+        string.Equals(CultureInfo.CurrentUICulture.TwoLetterISOLanguageName, "zh", StringComparison.OrdinalIgnoreCase);
+
+    private static string Ui(string chinese, string english) => UseChinese ? chinese : english;
+
     public LauncherForm()
     {
-        Text = "WoW Community";
-        ClientSize = new Size(330, 150);
+        Text = Ui("魔兽世界", "WoW");
+        ClientSize = new Size(500, 225);
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
+        MinimizeBox = true;
         StartPosition = FormStartPosition.CenterScreen;
+        AutoScaleMode = AutoScaleMode.Dpi;
+        BackColor = SystemColors.Control;
+
+        var titleLabel = new Label
+        {
+            Text = Ui("保持此程序开启", "Keep this program running"),
+            AutoSize = false,
+            Location = new Point(28, 40),
+            Size = new Size(444, 34),
+            Font = new Font(Font.FontFamily, 15F, FontStyle.Bold),
+            TextAlign = ContentAlignment.MiddleCenter
+        };
 
         var launchRemasteredButton = new Button
         {
-            Text = "重制版",
-            Location = new Point(30, 45),
-            Size = new Size(125, 55),
-            Font = new Font(Font.FontFamily, 12, FontStyle.Regular)
+            Text = Ui("重制版", "Remastered"),
+            Location = new Point(48, 116),
+            Size = new Size(185, 62),
+            Font = new Font(Font.FontFamily, 13F, FontStyle.Regular),
+            UseVisualStyleBackColor = true
         };
         launchRemasteredButton.Click += (_, _) => LaunchGame(RemasteredExeRelativePath);
 
         var launchClassicButton = new Button
         {
-            Text = "复古版",
-            Location = new Point(175, 45),
-            Size = new Size(125, 55),
-            Font = new Font(Font.FontFamily, 12, FontStyle.Regular)
+            Text = Ui("原始版", "Original"),
+            Location = new Point(267, 116),
+            Size = new Size(185, 62),
+            Font = new Font(Font.FontFamily, 13F, FontStyle.Regular),
+            UseVisualStyleBackColor = true
         };
         launchClassicButton.Click += (_, _) => LaunchGame(ClassicExeRelativePath);
 
+        Controls.Add(titleLabel);
         Controls.Add(launchRemasteredButton);
         Controls.Add(launchClassicButton);
 
+        _applicationIcon = LoadApplicationIcon();
+        Icon = _applicationIcon;
+
         var trayMenu = new ContextMenuStrip();
-        trayMenu.Items.Add("显示启动器", null, (_, _) => RestoreFromTray());
+        trayMenu.Items.Add(Ui("显示启动器", "Show launcher"), null, (_, _) => RestoreFromTray());
         trayMenu.Items.Add(new ToolStripSeparator());
-        trayMenu.Items.Add("退出并关闭代理", null, (_, _) => ExitFromTray());
+        trayMenu.Items.Add(Ui("打开重制版", "Open remastered"), null, (_, _) => LaunchGame(RemasteredExeRelativePath));
+        trayMenu.Items.Add(Ui("打开原始版", "Open original"), null, (_, _) => LaunchGame(ClassicExeRelativePath));
+        trayMenu.Items.Add(new ToolStripSeparator());
+        trayMenu.Items.Add(Ui("退出程序", "Exit program"), null, (_, _) => ExitFromTray());
 
         _trayIcon = new NotifyIcon
         {
-            Icon = SystemIcons.Application,
-            Text = "WoW Community",
+            Icon = _applicationIcon,
+            Text = Ui("魔兽世界", "WoW"),
             ContextMenuStrip = trayMenu,
             Visible = true
         };
@@ -78,34 +109,35 @@ internal sealed class LauncherForm : Form
         FormClosing += OnFormClosing;
     }
 
-    private void RunStartupTasks()
+    private static Icon LoadApplicationIcon()
     {
-        var errors = new List<string>();
+        const string resourceName = "ico.ico";
 
-        RunStep(() => ClearDirectoryContents(Path.Combine(_rootDirectory, ClassicWdbRelativePath)), errors);
-        RunStep(() => ClearDirectoryContents(Path.Combine(_rootDirectory, RemasteredCacheRelativePath)), errors);
-        RunStep(WriteClassicRealmlist, errors);
-        RunStep(StartProxy, errors);
+        using var stream = Assembly.GetExecutingAssembly()
+            .GetManifestResourceStream(resourceName);
 
-        if (errors.Count > 0)
-        {
-            MessageBox.Show(
-                string.Join(Environment.NewLine + Environment.NewLine, errors),
-                "WoW Community",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Warning);
-        }
+        return stream is null
+            ? (Icon)SystemIcons.Application.Clone()
+            : new Icon(stream);
     }
 
-    private static void RunStep(Action action, List<string> errors)
+    private void RunStartupTasks()
+    {
+        RunQuietly(() => ClearDirectoryContents(Path.Combine(_rootDirectory, ClassicWdbRelativePath)));
+        RunQuietly(() => ClearDirectoryContents(Path.Combine(_rootDirectory, RemasteredCacheRelativePath)));
+        RunQuietly(WriteClassicRealmlist);
+        RunQuietly(StartProxy);
+    }
+
+    private static void RunQuietly(Action action)
     {
         try
         {
             action();
         }
-        catch (Exception exception)
+        catch
         {
-            errors.Add(exception.Message);
+            // This launcher intentionally has no setup-error popups.
         }
     }
 
@@ -128,7 +160,7 @@ internal sealed class LauncherForm : Form
             .FirstOrDefault(address => address.AddressFamily == AddressFamily.InterNetwork);
 
         return ipv4?.ToString()
-            ?? throw new InvalidOperationException($"没有从 {host} 解析到 IPv4 A 记录。");
+            ?? throw new InvalidOperationException();
     }
 
     private void StartProxy()
@@ -144,58 +176,40 @@ internal sealed class LauncherForm : Form
             return;
         }
 
-        var proxyPath = Path.Combine(_rootDirectory, ProxyExeName);
-        var proxyConfigPath = Path.Combine(_rootDirectory, ProxyConfigName);
-
-        if (!File.Exists(proxyPath))
-        {
-            throw new FileNotFoundException($"找不到代理程序：{proxyPath}");
-        }
-
-        if (!File.Exists(proxyConfigPath))
-        {
-            throw new FileNotFoundException($"找不到代理配置：{proxyConfigPath}");
-        }
-
         var startInfo = new ProcessStartInfo
         {
-            FileName = proxyPath,
+            FileName = Path.Combine(_rootDirectory, ProxyExeName),
             WorkingDirectory = _rootDirectory,
             UseShellExecute = false,
             CreateNoWindow = true
         };
 
-        // HermesProxy.config remains the required base configuration.
-        // Only the fixed server address and realmd port are overridden here.
-        startInfo.ArgumentList.Add("--no-version-check");
+        // HermesProxy loads its own untouched default HermesProxy.config.
+        // The launcher supplies only the verified runtime overrides.
         startInfo.ArgumentList.Add("--set");
         startInfo.ArgumentList.Add($"ServerAddress={ServerAddress}");
         startInfo.ArgumentList.Add("--set");
         startInfo.ArgumentList.Add($"ServerPort={ServerPort}");
+        startInfo.ArgumentList.Add("--set");
+        startInfo.ArgumentList.Add($"ClientBuild={ClientBuild}");
+        startInfo.ArgumentList.Add("--set");
+        startInfo.ArgumentList.Add($"ServerBuild={ServerBuild}");
 
-        _ownedProxyProcess = Process.Start(startInfo)
-            ?? throw new InvalidOperationException("无法启动 HermesProxy.exe。");
+        _ownedProxyProcess = Process.Start(startInfo);
     }
 
     private void LaunchGame(string relativeExePath)
     {
-        var gamePath = Path.Combine(_rootDirectory, relativeExePath);
-
-        if (!File.Exists(gamePath))
+        RunQuietly(() =>
         {
-            MessageBox.Show(
-                $"找不到游戏程序：{gamePath}",
-                "WoW Community",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Error);
-            return;
-        }
+            var gamePath = Path.Combine(_rootDirectory, relativeExePath);
 
-        Process.Start(new ProcessStartInfo
-        {
-            FileName = gamePath,
-            WorkingDirectory = Path.GetDirectoryName(gamePath)!,
-            UseShellExecute = true
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = gamePath,
+                WorkingDirectory = Path.GetDirectoryName(gamePath)!,
+                UseShellExecute = true
+            });
         });
     }
 
@@ -217,6 +231,11 @@ internal sealed class LauncherForm : Form
         {
             Directory.Delete(childDirectory, recursive: true);
         }
+    }
+
+    internal void RestoreFromExternalActivation()
+    {
+        RestoreFromTray();
     }
 
     private void OnFormClosing(object? sender, FormClosingEventArgs eventArgs)
@@ -264,7 +283,7 @@ internal sealed class LauncherForm : Form
         }
         catch
         {
-            // Windows is already closing or the process exited between checks.
+            // Windows is closing or the proxy exited between checks.
         }
     }
 
@@ -273,6 +292,7 @@ internal sealed class LauncherForm : Form
         if (disposing)
         {
             _trayIcon.Dispose();
+            _applicationIcon.Dispose();
         }
 
         base.Dispose(disposing);
