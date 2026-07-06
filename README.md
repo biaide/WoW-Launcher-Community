@@ -59,7 +59,7 @@ Only one launcher instance runs per Windows user session.
 - Closing or minimizing the main window hides it in the notification area.
 - Launching `Launcher.exe` again does not start a second instance; it restores the existing launcher window to the foreground.
 - The notification-area menu follows the Windows UI language.
-- Selecting **Exit program / 退出程序** closes the launcher and the HermesProxy process that it started.
+- Selecting **Exit program** closes the launcher and the HermesProxy process that it started.
 
 ## Build
 
