@@ -44,8 +44,8 @@ The proxy command is equivalent to:
 
 ```powershell
 .\HermesProxy.exe `
-  --set ServerAddress=moshou.dynv6.net `
-  --set ServerPort=32769 `
+  --set ServerAddress=your.server.com `
+  --set ServerPort=3724 `
   --set ClientBuild=42597 `
   --set ServerBuild=5875
 ```
